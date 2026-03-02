@@ -38,6 +38,7 @@ from visual_gen import setup_configs
 from visual_gen.models.transformers.wan_transformer import ditWanTransformer3DModel
 from visual_gen.models.vaes.wan_vae import ditWanAutoencoderKL
 from visual_gen.pipelines.wan_pipeline import ditWanPipeline
+from visual_gen.utils import cudagraph_wrapper
 from visual_gen.utils.load_export_ckpt import export_quantized_checkpoint, load_quantized_checkpoint
 from visual_gen.utils.logger import get_logger
 
@@ -70,7 +71,7 @@ def load_and_setup_pipeline(args):
     # Wan T2V CPU offload configuration
     model_wise = ["text_encoder"]
     block_wise = ["transformer"]
-    if "Wan2.2" in args.model_path:
+    if "Wan2.2" and "14B" in args.model_path:
         block_wise.append("transformer_2")
 
     configure_cpu_offload(pipe, args, local_rank, model_wise=model_wise, block_wise=block_wise)
@@ -162,7 +163,7 @@ def run_multiple_prompts(pipe, args, enable_autotuner: bool = False):
                 frames, elapsed_time = run_inference(pipe, args, enable_autotuner)
                 log_args_and_timing(args, elapsed_time)
                 output_path = os.path.join(output_file, f"{prompt}-{idx}.mp4")
-                save_output(frames, output_path, output_type="video", fps=16)
+                save_output(frames, output_path, output_type="video", fps=args.fps)
                 output_info[f"{prompt}-{idx}.mp4"] = prompt
 
         # save output_info for later evaluation
@@ -176,7 +177,7 @@ def run_multiple_prompts(pipe, args, enable_autotuner: bool = False):
             frames, elapsed_time = run_inference(pipe, args, enable_autotuner)
             log_args_and_timing(args, elapsed_time)
             output_path = os.path.join(output_file, f"{idx}.mp4")
-            save_output(frames, output_path, output_type="video", fps=16)
+            save_output(frames, output_path, output_type="video", fps=args.fps)
             output_info[f"{idx}.mp4"] = prompt
 
         # save output_info for later evaluation
@@ -201,8 +202,10 @@ def main():
     )
 
     args = parser.parse_args()
-    if "Wan2.2" in args.model_path:
+    if "Wan2.2" and "14B" in args.model_path:
         args.torch_compile_models = "transformer,transformer_2"
+    else:
+        args.torch_compile_models = "transformer" # wan 2.2 5B
 
     enable_autotuner = False
     if args.linear_type == "auto" or args.attn_type == "auto":
@@ -236,6 +239,21 @@ def main():
     # Load pipeline
     pipe = load_and_setup_pipeline(args)
 
+    if args.enable_cuda_graph:
+        assert not (
+            args.enable_async_cpu_offload
+            or args.enable_sequential_cpu_offload
+            or args.enable_model_cpu_offload
+        ), "CudaGraph is not supported when using cpu offload"
+
+        pipe.transformer.run_transformer_blocks = cudagraph_wrapper(
+            pipe.transformer.run_transformer_blocks
+        )
+        if hasattr(pipe, "transformer_2") and pipe.transformer_2 is not None:
+            pipe.transformer_2.run_transformer_blocks = cudagraph_wrapper(
+                pipe.transformer_2.run_transformer_blocks
+            )
+
     # Recompute shape for vae
     args.height, args.width = recompute_shape_for_vae(
         args.height,
@@ -254,7 +272,7 @@ def main():
 
         # Log results and save output
         log_args_and_timing(args, elapsed_time)
-        save_output(frames, output_path, output_type="video", fps=16)
+        save_output(frames, output_path, output_type="video", fps=args.fps)
 
     else:
         run_multiple_prompts(pipe, args, enable_autotuner)

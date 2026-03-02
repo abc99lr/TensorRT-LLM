@@ -37,6 +37,7 @@ class ditWanAutoencoderKL(AutoencoderKLWan):
     def __init__(
         self,
         base_dim: int = 96,
+        decoder_base_dim: int | None = None,
         z_dim: int = 16,
         dim_mult: Tuple[int] = [1, 2, 4, 4],
         num_res_blocks: int = 2,
@@ -79,10 +80,17 @@ class ditWanAutoencoderKL(AutoencoderKLWan):
             2.8251,
             1.9160,
         ],
+        is_residual: bool = False,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        patch_size: int | None = None,
+        scale_factor_temporal: int | None = 4,
+        scale_factor_spatial: int | None = 8,
     ) -> None:
 
         super().__init__(
             base_dim=base_dim,
+            decoder_base_dim=decoder_base_dim,
             z_dim=z_dim,
             dim_mult=dim_mult,
             num_res_blocks=num_res_blocks,
@@ -91,6 +99,12 @@ class ditWanAutoencoderKL(AutoencoderKLWan):
             dropout=dropout,
             latents_mean=latents_mean,
             latents_std=latents_std,
+            is_residual=is_residual,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            patch_size=patch_size,
+            scale_factor_temporal=scale_factor_temporal,
+            scale_factor_spatial=scale_factor_spatial,
         )
 
         init_dist(device_type="cuda")

@@ -157,7 +157,7 @@ class BaseArgumentParser:
 
         # Torch compile args
         self.parser.add_argument(
-            "--disable_torch_compile", action="store_true", help="Use torch compile"
+            "--disable_torch_compile", action="store_true", help="Disable torch compile"
         )
         self.parser.add_argument(
             "--torch_compile_models",

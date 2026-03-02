@@ -60,7 +60,11 @@ class ditWanPipeline(WanPipeline, ditBasePipeline):
     """
 
     def _set_teacache_coefficients(self, pretrained_model_name_or_path, **kwargs) -> None:
+        if not TeaCacheConfig.enable_teacache():
+            return
+
         logger.debug("Setting up TeaCache configuration")
+        
         if TeaCacheConfig.use_ret_steps():
             logger.debug("Using ret_steps mode for TeaCache")
             if "1.3B" in pretrained_model_name_or_path:

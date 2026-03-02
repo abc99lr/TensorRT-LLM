@@ -346,11 +346,12 @@ def benchmark_inference(
 
     torch.cuda.synchronize()
     start_event.record()
-    if enable_autotuner:
-        with AutoTuner(mode="inference", result_dir=autotuner_dir):
+    with torch.cuda.nvtx.range("benchmark_inference"):
+        if enable_autotuner:
+            with AutoTuner(mode="inference", result_dir=autotuner_dir):
+                result = func(*args, **kwargs)
+        else:
             result = func(*args, **kwargs)
-    else:
-        result = func(*args, **kwargs)
     torch.cuda.synchronize()
     end_event.record()
 
