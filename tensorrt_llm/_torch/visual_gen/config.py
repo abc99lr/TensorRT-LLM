@@ -553,6 +553,8 @@ class DiffusionModelConfig(BaseModel):
                 transformer_2_spec = model_index.get("transformer_2")
                 if transformer_2_spec and transformer_2_spec[0] is not None:
                     pretrained_config.boundary_ratio = model_index["boundary_ratio"]
+            if "expand_timesteps" in model_index:
+                pretrained_config.expand_timesteps = bool(model_index["expand_timesteps"])
 
         # Resolve quant config: use args if user set quant (QuantConfig from dict), else checkpoint
         if args and args.quant_config.quant_algo is not None:

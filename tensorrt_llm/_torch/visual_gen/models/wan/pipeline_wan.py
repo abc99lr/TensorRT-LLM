@@ -59,10 +59,14 @@ WAN_DEFAULT_NEGATIVE_PROMPT = (
 @register_pipeline("WanPipeline")
 class WanPipeline(BasePipeline):
     def __init__(self, model_config):
-        # Wan2.2 two-stage denoising parameters
+        # Wan2.2 A14B two-stage denoising parameters
         self.transformer_2 = None
         self.boundary_ratio = getattr(model_config.pretrained_config, "boundary_ratio", None)
-        self.is_wan22 = self.boundary_ratio is not None
+        self.expand_timesteps = getattr(model_config.pretrained_config, "expand_timesteps", False)
+
+        # Derived model type flags
+        self.is_wan22_14b = self.boundary_ratio is not None
+        self.is_wan22_5b = self.expand_timesteps
 
         super().__init__(model_config)
 
@@ -109,6 +113,9 @@ class WanPipeline(BasePipeline):
     @property
     def common_warmup_shapes(self) -> list:
         """Return list of common warmup shapes for the pipeline."""
+        if self.is_wan22_5b:
+            # The 720p resolution of Wan2.2 TI2V 5B model is 704x1280
+            return [(480, 832, 33), (480, 832, 81), (704, 1280, 81)]
         return [(480, 832, 33), (480, 832, 81), (720, 1280, 81)]
 
     def _init_transformer(self) -> None:
@@ -136,8 +143,10 @@ class WanPipeline(BasePipeline):
             )
 
         # Detect model version
-        if self.is_wan22:
-            logger.info("Detected Wan 2.2 T2V (two-stage denoising)")
+        if self.is_wan22_14b:
+            logger.info("Detected Wan 2.2 A14B T2V (two-stage denoising)")
+        elif self.is_wan22_5b:
+            logger.info("Detected Wan 2.2 5B T2V (single-stage denoising)")
         else:
             logger.info("Detected Wan 2.1 T2V (single-stage denoising)")
 
@@ -199,10 +208,10 @@ class WanPipeline(BasePipeline):
 
         # Wan2.2: Load weights for second transformer if it exists
         if self.transformer_2 is not None and hasattr(self.transformer_2, "load_weights"):
-            logger.info("Loading transformer_2 weights for Wan2.2...")
+            logger.info("Loading transformer_2 weights for Wan2.2 A14B...")
             if not has_separate_weights:
                 raise ValueError(
-                    "Wan2.2 model requires separate 'transformer' and 'transformer_2' weights in checkpoint, "
+                    "Wan2.2 A14B model requires separate 'transformer' and 'transformer_2' weights in checkpoint, "
                     f"but only found: {list(weights.keys())}. "
                     "Two-stage denoising requires distinct weights for high-noise and low-noise transformers."
                 )
@@ -253,7 +262,7 @@ class WanPipeline(BasePipeline):
         Runs warmup inference with common shapes for Wan models.
         """
 
-        if self.is_wan22:
+        if self.is_wan22_14b:
             # Double warmup steps to also warmup the 2nd transformer
             warmup_steps = warmup_steps * 2
 
@@ -311,10 +320,10 @@ class WanPipeline(BasePipeline):
         # Use user-provided boundary_ratio if given, otherwise fall back to model config
         boundary_ratio = boundary_ratio if boundary_ratio is not None else self.boundary_ratio
 
-        # Validate that Wan 2.2 models have boundary_ratio set
+        # Validate that Wan 2.2 A14B models have boundary_ratio set
         if self.transformer_2 is not None and boundary_ratio is None:
             raise ValueError(
-                "Wan 2.2 models require boundary_ratio to be set. "
+                "Wan 2.2 A14B models require boundary_ratio to be set. "
                 "boundary_ratio was not found in model config. "
                 "Please pass boundary_ratio as a parameter."
             )
@@ -325,17 +334,17 @@ class WanPipeline(BasePipeline):
 
         # Set model-specific defaults based on Wan version
         logger.info(
-            f"Running {'Wan 2.2' if self.is_wan22 else 'Wan 2.1'} T2V inference"
+            f"Running {'Wan 2.2 A14B' if self.is_wan22_14b else 'Wan 2.2 5B' if self.is_wan22_5b else 'Wan 2.1'} T2V inference"
             f"(boundary_ratio={boundary_ratio}, has_transformer_2={self.transformer_2 is not None})"
         )
 
         if num_inference_steps is None:
-            num_inference_steps = 40 if self.is_wan22 else 50
+            num_inference_steps = 40 if self.is_wan22_14b else 50
 
         if guidance_scale is None:
-            guidance_scale = 4.0 if self.is_wan22 else 5.0
+            guidance_scale = 4.0 if self.is_wan22_14b else 5.0
 
-        if self.is_wan22 and guidance_scale_2 is None:
+        if self.is_wan22_14b and guidance_scale_2 is None:
             guidance_scale_2 = 3.0
 
         # Validate two-stage denoising configuration
@@ -399,6 +408,16 @@ class WanPipeline(BasePipeline):
                     last_model_used[0] = model_name
             else:
                 current_model = self.transformer
+
+            if self.expand_timesteps:
+                current_t = timestep if timestep.dim() == 0 else timestep[0]
+                mask = torch.ones(
+                    latents.shape, device=latents.device, dtype=torch.float32
+                )
+                # Use patch size from transformer config for spatial downsampling
+                _, ph, pw = self.transformer.config.patch_size
+                temp_ts = (mask[0, 0, :, ::ph, ::pw] * current_t).flatten()
+                timestep = temp_ts.unsqueeze(0).expand(latents.shape[0], -1)
 
             return current_model(
                 hidden_states=latents,
@@ -514,7 +533,7 @@ class WanPipeline(BasePipeline):
 
     @nvtx_range("_prepare_latents", color="blue")
     def _prepare_latents(self, height, width, num_frames, generator):
-        num_channels_latents = 16
+        num_channels_latents = getattr(self.transformer.config, "in_channels", 16)
         num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
 
         shape = (
